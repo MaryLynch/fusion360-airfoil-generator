@@ -47,4 +47,4 @@ Thanks to the [Fusion 360 development team](https://github.com/AutodeskFusion360
 This script is available as open source under the terms of the [MIT License](http://opensource.org/licenses/MIT). Please see the [LICENSE](https://raw.githubusercontent.com/arnaudin/fusion360-airfoil-generator/master/LICENSE) file for full details.
 
 ## Author :pencil:
-This add-in was created by [Ryan Arnaudin](http://ryanarnaudin.com).
+This add-in was created by [Ryan Arnaudin](http://ryanarnaudin.com) and later modified by [Maryanne Lynch](https://github.com/MaryLynch)
