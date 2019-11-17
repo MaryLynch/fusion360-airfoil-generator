@@ -1,5 +1,6 @@
-#Author-Ryan Arnaudin
+#Author-Maryanne Lynch
 #Description-Generate sketch profiles for NACA airfoils in Fusion 360
+
 from math import cos, sin
 from math import atan
 from math import pi
@@ -8,26 +9,20 @@ from math import sqrt
 
 import adsk.core, adsk.fusion, traceback
 
-# global set of event handlers to keep them referenced for the duration of the command
-handlers = []
-
+commandIdOnPanel = 'airfoilCommandOnPanel'
 defaultAirfoilProfile = '2412'
-defaultAirfoilNumPts = 30
+defaultAirfoilNumPts = 120
 defaultAirfoilHalfCosine = False
 defaultAirfoilFT = False
+defaultAirfoilSketchPlane = 'Right'
+defaultAirfoilUseSplines = False
+defaultAirfoilSketchName = 'My Airfoil'
+airfoilSketchPlane = None
+maxNumPts = 500
+minNumPts = 10
 
-ui = None
-try:
-    app = adsk.core.Application.get()
-    ui  = app.userInterface
-    design = app.activeProduct
-
-except:
-    if ui:
-        ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
-
-# Portions of this code derived from naca.py by Dirk Gorissen
-# https://github.com/dgorissen/naca
+# global set of event handlers to keep them referenced for the duration of the command
+handlers = []
 
 """
 Python 2 and 3 code to generate 4 and 5 digit NACA profiles
@@ -279,107 +274,16 @@ def naca(number, n, finite_TE = defaultAirfoilFT, half_cosine_spacing = defaultA
     else:
         raise Exception
 
-class AirfoilCommandExecuteHandler(adsk.core.CommandEventHandler):
-    # Execute Airfoil Command
-    def __init__(self):
-        super().__init__()
-    def notify(self, args):
-        # Assign variables
-        airfoilError = False
-        airfoilProfile = defaultAirfoilProfile
-        airfoilNumPts = defaultAirfoilNumPts
-        airfoilHalfCosine = defaultAirfoilHalfCosine
-        airfoilFT = defaultAirfoilFT
-        
-        # Generate the airfoil sketch for given parameters
-        try:
-            command = args.firingEvent.sender
-            inputs = command.commandInputs
-            
-            for input in inputs:
-                if input.id == 'airfoilProfile':
-                    airfoilProfile = input.value      
-                    airfoilProfileLen = len(airfoilProfile)
-                    if airfoilProfileLen > 5:
-                        ui.messageBox('Only 4 and 5 series NACA airfoils are supported')
-                        airfoilError = True
-                    elif airfoilProfileLen < 4:
-                        ui.messageBox('Only 4 and 5 series NACA airfoils are supported')
-                        airfoilError = True
-                    try:
-                        int(float(airfoilProfile)) 
-                    except:
-                        ui.messageBox('NACA input must be 4 or 5 digits in the format: 2412')
-                        airfoilError = True
-                elif input.id == 'airfoilNumPts':
-                    airfoilNumPts = input.value      
-                    try:
-                        airfoilNumPts = int(float(airfoilNumPts)) 
-                    except:
-                        ui.messageBox('Number of points must be an integer')
-                        airfoilError = True
-                elif input.id == 'airfoilHalfCosine':
-                    airfoilHalfCosine = input.value
-                elif input.id == 'airfoilFT':
-                    airfoilFT = input.value
-                else:
-                    ui.messageBox('Unrecognized input: ' + input.id)
-                    airfoilError = True
-                    
-            if airfoilError == False:
-                pts = naca(airfoilProfile, airfoilNumPts, airfoilFT, airfoilHalfCosine)
-                sketchName = ' NACA ' + str(airfoilProfile)
-                connectPointsLines(pts, sketchName)  
-                args.isValidResult = True
-            else:
-                args.isValidResult = False
-            
-        except:
-            if ui:
-                ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
-
-class AirfoilCommandDestroyHandler(adsk.core.CommandEventHandler):
-    def __init__(self):
-        super().__init__()
-    def notify(self, args):
-        try:
-            adsk.terminate()
-        except:
-            if ui:
-                ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
-
-class AirfoilCommandCreatedHandler(adsk.core.CommandCreatedEventHandler):
-    # Create Airfoil Command    
-    def __init__(self):
-        super().__init__()        
-    def notify(self, args):
-        try:
-            cmd = args.command
-            onExecute = AirfoilCommandExecuteHandler()
-            cmd.execute.add(onExecute)
-            onDestroy = AirfoilCommandDestroyHandler()
-            cmd.destroy.add(onDestroy)
-            # keep the handler referenced beyond this function
-            handlers.append(onExecute)
-            handlers.append(onDestroy)
-
-            #define the UI inputs
-            inputs = cmd.commandInputs
-            inputs.addStringValueInput('airfoilProfile', 'NACA profile', defaultAirfoilProfile)
-            inputs.addStringValueInput('airfoilNumPts', 'Points per side', str(defaultAirfoilNumPts))
-            inputs.addBoolValueInput('airfoilHalfCosine', 'Half cosine spacing', True, '', defaultAirfoilHalfCosine)
-            inputs.addBoolValueInput('airfoilFT', 'Finite thickness TE', True, '', defaultAirfoilFT)
-            
-        except:
-            if ui:
-                ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
-
-def connectPointsLines(pts, sketchName=''):
+def connectPointsLines(pts, airfoilUseSplines, airfoilSketchPlane, sketchName):
     # Connects a closed set of 2D points with line segments
     # Format of pts should be ([x1,x2,...,xn][y1,y2,...,yn])
+    app = adsk.core.Application.get()
+    ui  = app.userInterface
+    design = app.activeProduct    
+    
     root = design.rootComponent
-    sketch = root.sketches.add(root.xYConstructionPlane)
-    sketch.name = "Airfoil" + sketchName
+    sketch = root.sketches.add(airfoilSketchPlane)
+    sketch.name = sketchName
     sketch.isComputeDeferred = True
 
     xs = pts[0]
@@ -388,73 +292,251 @@ def connectPointsLines(pts, sketchName=''):
     numpts = len(xs)
     
     lines = sketch.sketchCurves.sketchLines
+
+    # Create an object collection for the points in the spline 
+    points = adsk.core.ObjectCollection.create()
     
     for i in range(numpts -1):
         point1x = xs[i]
         point1y = ys[i]
         point2x = xs[i+1]
         point2y = ys[i+1]
-        
-        lines.addByTwoPoints(adsk.core.Point3D.create(point1x, point1y, 0), adsk.core.Point3D.create(point2x, point2y, 0))
-    
+
+        # Added by Maryanne
+        if airfoilUseSplines:
+            points.add(adsk.core.Point3D.create(point1x, point1y, 0))
+            points.add(adsk.core.Point3D.create(point2x, point2y, 0))
+        else:
+            lines.addByTwoPoints(adsk.core.Point3D.create(point1x, point1y, 0), adsk.core.Point3D.create(point2x, point2y, 0))
+
     # Connect first and last points
-    lines.addByTwoPoints(adsk.core.Point3D.create(xs[numpts-1], ys[numpts-1], 0), adsk.core.Point3D.create(xs[0], ys[0], 0))
-        
+    lastPoint = adsk.core.Point3D.create(xs[numpts-1], ys[numpts-1], 0)
+    firstPoint = adsk.core.Point3D.create(xs[0], ys[0], 0)
+
+    # Create the sketch 
+    if airfoilUseSplines:
+        #points.add(lastPoint)
+        #points.add(firstPoint)
+        spline = sketch.sketchCurves.sketchFittedSplines.add(points)
+        spline.isClosed = True
+    else:
+        lines.addByTwoPoints(lastPoint, firstPoint)
+     
     sketch.isComputeDeferred = False        
 
-def connectPointsMidpointSplines(pts, sketchName=''):
-    # Experimental, not implemented
-    # Connects a closed set of 2D points with midpoint splines
-    # Format of pts should be ([x1,x2,...,xn][y1,y2,...,yn])
-    root = design.rootComponent
-    sketch = root.sketches.add(root.xYConstructionPlane)
-    sketch.name = "Airfoil"
-    sketch.isComputeDeferred = True
 
-    xs = pts[0]
-    ys = pts[1]
-    
-    numpts = len(xs)
-    
-    points3d = adsk.core.ObjectCollection.create()
-        
-    for i in range(numpts-1):
-        point1x = xs[i]
-        point1y = ys[i]
-        point2x = xs[i+1]
-        point2y = ys[i+1]
-        
-        xMidPt = (point2x + point1x) / 2
-        yMidPt = (point2y + point1y) / 2
-        
-        points3d.add(adsk.core.Point3D.create(xMidPt, yMidPt, 0))
-    
-    spline = sketch.sketchCurves.sketchFittedSplines.add(points3d)
-    spline.isClosed = True
-        
-    sketch.isComputeDeferred = False    
-        
+def commandDefinitionById(id):
+    app = adsk.core.Application.get()
+    ui = app.userInterface
+    if not id:
+        ui.messageBox('commandDefinition id is not specified')
+        return None
+    commandDefinitions_ = ui.commandDefinitions
+    commandDefinition_ = commandDefinitions_.itemById(id)
+    return commandDefinition_
+
+def commandControlByIdForPanel(id):
+    app = adsk.core.Application.get()
+    ui = app.userInterface
+    if not id:
+        ui.messageBox('commandControl id is not specified')
+        return None
+    workspaces_ = ui.workspaces
+    modelingWorkspace_ = workspaces_.itemById('FusionSolidEnvironment')
+    toolbarPanels_ = modelingWorkspace_.toolbarPanels
+    toolbarPanel_ = toolbarPanels_.itemById('SolidCreatePanel')
+    toolbarControls_ = toolbarPanel_.controls
+    toolbarControl_ = toolbarControls_.itemById(id)
+    return toolbarControl_
+
+def destroyObject(uiObj, tobeDeleteObj):
+    if uiObj and tobeDeleteObj:
+        if tobeDeleteObj.isValid:
+            tobeDeleteObj.deleteMe()
+        else:
+            uiObj.messageBox('tobeDeleteObj is not a valid object')
+
 def run(context):
-    try:        
-        commandDefinitions = ui.commandDefinitions
-        #check the command exists or not
-        cmdDef = commandDefinitions.itemById('Airfoil')
-        if not cmdDef:
-            cmdDef = commandDefinitions.addButtonDefinition('Airfoil',
-                    'Create Airfoil',
-                    'Create an airfoil.',
-                    './resources') # relative resource file path is specified
+    ui = None
+    try:
+        app = adsk.core.Application.get()
+        ui = app.userInterface
+ 
+        commandName = 'Create Airfoil'
+        commandDescription = 'Generate sketch profiles for NACA 4 and 5 series airfoils.\n\nSpecify a NACA 4 or 5 series airfoil in the format "2412" and choose the number of points on top & bottom for discretization. Resulting profile will have 2*numPoints+1 total.\n\nHalf cosine spacing provides finer discretization near the leading edge of the airfoil compared to constant spacing, resulting in a smoother LE.\n\nFinite thickness is applied at the trailing edge, in contrast to a zero thickness in which the upper and lower surfaces meet at a sharp point.\n\n'
+        commandResources = './resources'
+        iconResources = './resources'
+
+        class AirfoilCommandExecuteHandler(adsk.core.CommandEventHandler):
+            # Execute Airfoil Command
+            def __init__(self):
+                super().__init__()
+            def notify(self, args):
+                # Assign variables
+                airfoilError = False
+                airfoilProfile = defaultAirfoilProfile
+                airfoilNumPts = defaultAirfoilNumPts
+                airfoilHalfCosine = defaultAirfoilHalfCosine
+                airfoilFT = defaultAirfoilFT
+                airfoilUseSplines = defaultAirfoilUseSplines
+                airfoilSketchName = defaultAirfoilSketchName
+                
+                # Generate the airfoil sketch for given parameters
+                try:
+                    command = args.firingEvent.sender
+                    inputs = command.commandInputs
+                    
+                    for input in inputs:
+                        if input.id == 'airfoilProfile':
+                            airfoilProfile = input.value      
+                            airfoilProfileLen = len(airfoilProfile)
+                            if airfoilProfileLen > 5:
+                                ui.messageBox('Only 4 and 5 series NACA airfoils are supported')
+                                airfoilError = True
+                            elif airfoilProfileLen < 4:
+                                ui.messageBox('Only 4 and 5 series NACA airfoils are supported')
+                                airfoilError = True
+                            try:
+                                airfoilProfileInt = int(float(airfoilProfile)) 
+                                if airfoilProfileInt < 0:
+                                    ui.messageBox('NACA input must be a 4 or 5 digit positive number')
+                                    airfoilError = True                                
+                            except:
+                                ui.messageBox('NACA input must be 4 or 5 digits in the format: 2412')
+                                airfoilError = True
+                        elif input.id == 'airfoilNumPts':
+                            airfoilNumPts = input.value      
+                            try:
+                                airfoilNumPts = int(float(airfoilNumPts)) 
+                                if airfoilNumPts < 0:
+                                    ui.messageBox('Number of points must be a positive integer')
+                                    airfoilError = True
+                                elif airfoilNumPts > maxNumPts:
+                                    ui.messageBox('Number of points is currently limited to ' + str(maxNumPts) + '. Higher limits will degrade performance. If you know what you are doing, update the maxNumPts constant in code')
+                                    airfoilError = True
+                                elif airfoilNumPts < minNumPts:
+                                    ui.messageBox('Number of points should be greater than ' + str(minNumPts) + ' to capture the airfoil shape. If you know what you are doing, update the minNumPts constant in code')
+                                    airfoilError = True
+                            except:
+                                ui.messageBox('Number of points must be an integer')
+                                airfoilError = True
+                        elif input.id == 'airfoilHalfCosine':
+                            airfoilHalfCosine = input.value
+                        elif input.id == 'airfoilFT':
+                            airfoilFT = input.value
+                        elif input.id == 'airfoilSketchName':
+                            airfoilSketchName = input.value
+                        elif input.id == 'airfoilSketchPlane':
+                            
+                            airfoilSketchPlaneText = input.selectedItem.name
+                            rt = adsk.fusion.Design.cast(app.activeProduct).rootComponent
+
+                            if airfoilSketchPlaneText == 'Right':
+                                airfoilSketchPlane = rt.yZConstructionPlane
+                            elif airfoilSketchPlaneText == 'Top':
+                                airfoilSketchPlane = rt.xYConstructionPlane
+                            elif airfoilSketchPlaneText == 'Front':
+                                airfoilSketchPlane = rt.xZConstructionPlane
+                        elif input.id == 'airfoilUseSplines':
+                            airfoilUseSplines = input.value
+                        else:
+                            ui.messageBox('Unrecognized input: ' + input.id)
+                            airfoilError = True
+                            
+                    if airfoilError == False:
+                        pts = naca(airfoilProfile, airfoilNumPts, airfoilFT, airfoilHalfCosine)
+                        #sketchName = ' NACA ' + str(airfoilProfile)
+                        connectPointsLines(pts, airfoilUseSplines, airfoilSketchPlane, airfoilSketchName)  
+                        args.isValidResult = True
+                    else:
+                        args.isValidResult = False
+                    
+                except:
+                    if ui:
+                        ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
+                    
+            
     
-        onCommandCreated = AirfoilCommandCreatedHandler()
-        cmdDef.commandCreated.add(onCommandCreated)
-        # keep the handler referenced beyond this function
-        handlers.append(onCommandCreated)
-        inputs = adsk.core.NamedValues.create()
-        cmdDef.execute(inputs)
-        
-        # prevent this module from being terminate when the script returns, because we are waiting for event handlers to fire
-        adsk.autoTerminate(False)
-        
+            class AirfoilCommandCreatedHandler(adsk.core.CommandCreatedEventHandler):
+                # Create Airfoil Command    
+                def __init__(self):
+                    super().__init__()        
+                def notify(self, args):
+                    try:
+                        cmd = args.command
+                        onExecute = AirfoilCommandExecuteHandler()
+                        cmd.execute.add(onExecute)
+
+                        # keep the handler referenced beyond this function
+                        handlers.append(onExecute)
+
+            
+                        #define the UI inputs
+                        inputs = cmd.commandInputs
+                        inputs.addStringValueInput('airfoilSketchName', 'Sketch Name', defaultAirfoilSketchName)
+                        inputs.addStringValueInput('airfoilProfile', 'NACA profile', defaultAirfoilProfile)
+                        inputs.addStringValueInput('airfoilNumPts', 'Points per side', str(defaultAirfoilNumPts))
+                        inputs.addBoolValueInput('airfoilHalfCosine', 'Half cosine spacing', True, '', defaultAirfoilHalfCosine)
+                        inputs.addBoolValueInput('airfoilFT', 'Finite thickness TE', True, '', defaultAirfoilFT)
+
+                        # Added by Maryanne
+                        
+                        sketchPanelInput = inputs.addDropDownCommandInput('airfoilSketchPlane', 'Select a sketch face', adsk.core.DropDownStyles.TextListDropDownStyle)
+
+                        sketchPanelItems = sketchPanelInput.listItems
+                        sketchPanelItems.add("Right", True, "Right")
+                        sketchPanelItems.add("Top", False, "Top")
+                        sketchPanelItems.add("Front", False, "Front")
+
+                        inputs.addBoolValueInput('airfoilUseSplines', 'Use Splines', True, '', defaultAirfoilUseSplines)
+                                                       
+                    except:
+                        if ui:
+                            ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
+    
+            commandDefinitions_ = ui.commandDefinitions
+    
+            # add a command on create panel in modeling workspace
+            workspaces_ = ui.workspaces
+            modelingWorkspace_ = workspaces_.itemById('FusionSolidEnvironment')
+            toolbarPanels_ = modelingWorkspace_.toolbarPanels
+            toolbarPanel_ = toolbarPanels_.itemById('SolidCreatePanel') # add the new command under the first panel
+            toolbarControlsPanel_ = toolbarPanel_.controls
+            toolbarControlPanel_ = toolbarControlsPanel_.itemById(commandIdOnPanel)
+            if not toolbarControlPanel_:
+                commandDefinitionPanel_ = commandDefinitions_.itemById(commandIdOnPanel)
+                if not commandDefinitionPanel_:
+                    commandDefinitionPanel_ = commandDefinitions_.addButtonDefinition(commandIdOnPanel, commandName, commandDescription, commandResources)
+                onCommandCreated = AirfoilCommandCreatedHandler()
+                commandDefinitionPanel_.commandCreated.add(onCommandCreated)
+                # keep the handler referenced beyond this function
+                handlers.append(onCommandCreated)
+                toolbarControlPanel_ = toolbarControlsPanel_.addCommand(commandDefinitionPanel_)
+                toolbarControlPanel_.isVisible = True
+
     except:
         if ui:
-            ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
+            ui.messageBox('AddIn Start Failed: {}'.format(traceback.format_exc()))
+
+def stop(context):
+    ui = None
+    try:
+        app = adsk.core.Application.get()
+        ui = app.userInterface
+        objArrayPanel = []
+
+        commandControlPanel_ = commandControlByIdForPanel(commandIdOnPanel)
+        if commandControlPanel_:
+            objArrayPanel.append(commandControlPanel_)
+
+        commandDefinitionPanel_ = commandDefinitionById(commandIdOnPanel)
+        if commandDefinitionPanel_:
+            objArrayPanel.append(commandDefinitionPanel_)
+
+        for obj in objArrayPanel:
+            destroyObject(ui, obj)
+
+    except:
+        if ui:
+            ui.messageBox('AddIn Stop Failed: {}'.format(traceback.format_exc()))
+
